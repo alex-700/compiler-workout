@@ -5,8 +5,9 @@
 *)
 open GT
 
-     (* The type for the expression. Note, in regular OCaml there is no "@type..."
-        notation, it came from GT. *)
+(* The type for the expression. Note, in regular OCaml there is no "@type..." 
+   notation, it came from GT. 
+*)
 @type expr =
 (* integer constant *) | Const of int
 (* variable         *) | Var   of string
@@ -76,8 +77,8 @@ let eval s e =
             | "<" -> (<)
             | ">=" -> (>=)
             | "<=" -> (<=)
-            | "==" -> (==)
-            | "!=" -> (!=)
+            | "==" -> (=)
+            | "!=" -> (<>)
             | "!!" -> (||) @.. bool_of_int
             | "&&" -> (&&) @.. bool_of_int
             | _ -> failwith "Unsupported operation" in
