@@ -27,7 +27,7 @@ type config = int list * Syntax.Stmt.config
 let eval =
   let eval con stmt =
     match stmt, con with
-    | BINOP op, (x::y::stack, scon) -> Expr.op_of_string op x y::stack, scon
+    | BINOP op, (y::x::stack, scon) -> Expr.op_of_string op x y::stack, scon
     | CONST num, (stack, scon) -> num::stack, scon
     | READ, (stack, (st, num::inp, out)) -> num::stack, (st, inp, out)
     | WRITE, (num::stack, (st, inp, out)) -> stack, (st, inp, out @ [num])
@@ -39,7 +39,7 @@ let eval =
 let rec compile_expr = function
   | Expr.Const num -> [CONST num]
   | Expr.Var var -> [LD var]
-  | Expr.Binop (op, e1, e2) -> compile_expr e2 @ compile_expr e1 @ [BINOP op]
+  | Expr.Binop (op, e1, e2) -> compile_expr e1 @ compile_expr e2 @ [BINOP op]
 
 (* Stack machine compiler
 
