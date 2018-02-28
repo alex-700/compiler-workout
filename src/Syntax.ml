@@ -103,3 +103,17 @@ struct
     | Seq (expr1, expr2) -> eval (eval (st, inp, out) expr1) expr2
 end
 
+
+(* The top-level definitions *)
+
+(* The top-level syntax category is statement *)
+type t = Stmt.t    
+
+(* Top-level evaluator
+
+     eval : int list -> t -> int list
+
+   Takes a program and its input stream, and returns the output stream
+*)
+let eval i p =
+  let _, _, o = Stmt.eval (Expr.empty, i, []) p in o

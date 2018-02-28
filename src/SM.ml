@@ -41,6 +41,14 @@ let rec compile_expr = function
   | Expr.Var var -> [LD var]
   | Expr.Binop (op, e1, e2) -> compile_expr e2 @ compile_expr e1 @ [BINOP op]
 
+(* Top-level evaluation
+
+     val run : int list -> prg -> int list
+
+   Takes an input stream, a program, and returns an output stream this program calculates
+*)
+let run i p = let (_, (_, _, o)) = eval ([], (Syntax.Expr.empty, i, [])) p in o
+
 (* Stack machine compiler
 
      val compile : Syntax.Stmt.t -> prg
