@@ -5,7 +5,7 @@ open GT
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
-       
+
 (* Simple expressions: syntax and semantics *)
 module Expr =
 struct
@@ -36,16 +36,6 @@ struct
      to value v and returns the new state.
   *)
   let update x v s = fun y -> if x = y then v else s y
-
-    (* Expression parser. You can use the following terminals:
-
-         IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
-         DECIMAL --- a decimal constant [0-9]+ as a string
-   
-    *)
-    ostap (
-      parse: empty {failwith "Not implemented yet"}
-    )
 
   let (@.) f g x y = f @@ g x y
 
@@ -87,6 +77,15 @@ struct
     | Const x -> x
     | Var x -> s x
     | Binop(op, l, r) -> (op_of_string op @.. eval s) l r
+
+  (* Expression parser. You can use the following terminals:
+
+       IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
+       DECIMAL --- a decimal constant [0-9]+ as a string
+  *)
+  ostap (
+    parse: empty {failwith "Not implemented yet"}
+  )
 end
 
 (* Simple statements: syntax and sematics *)
@@ -114,18 +113,16 @@ struct
     | Write expr -> st, inp, out @ [Expr.eval st expr]
     | Assign (var, expr) -> Expr.update var (Expr.eval st expr) st, inp, out
     | Seq (expr1, expr2) -> eval (eval (st, inp, out) expr1) expr2
+
+  (* Statement parser *)
+  ostap (
+    parse: empty {failwith "Not implemented yet"}
+  )
 end
-
-    (* Statement parser *)
-    ostap (
-      parse: empty {failwith "Not implemented yet"}
-    )
-      
-
 (* The top-level definitions *)
 
 (* The top-level syntax category is statement *)
-type t = Stmt.t    
+type t = Stmt.t
 
 (* Top-level evaluator
 
@@ -137,4 +134,5 @@ let eval p i =
   let _, _, o = Stmt.eval (Expr.empty, i, []) p in o
 
 (* Top-level parser *)
-let parse = Stmt.parse                                                     
+let parse = Stmt.parse
+

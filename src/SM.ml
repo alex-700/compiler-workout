@@ -1,6 +1,6 @@
-open GT       
+open GT
 open Language
-       
+
 (* The type for the stack machine instructions *)
 @type insn =
 (* binary operator                 *) | BINOP of string
@@ -62,4 +62,3 @@ let rec compile = function
   | Stmt.Assign (var, expr) -> compile_expr expr @ [ST var]
   | Stmt.Seq (stmt1, stmt2) -> compile stmt1 @ compile stmt2
 
-                         
