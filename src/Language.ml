@@ -83,8 +83,27 @@ struct
        IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
        DECIMAL --- a decimal constant [0-9]+ as a string
   *)
+
+  let construct_op s = fun x y -> Binop(s, x, y)
+
+  (* I can't apply eta conversion here, because weak types cannot appear in translation units.
+     Seriously, OCaml?
+  *)
+  let list_of_ops l = List.map (fun s -> (ostap ($(s)), construct_op s)) l
+
   ostap (
-    parse: empty {failwith "Not implemented yet"}
+    primary: x:IDENT {Var x} | x:DECIMAL {Const x} | -"(" parse -")";
+    parse: !(Ostap.Util.expr
+               (fun x -> x)
+               [|
+                 `Lefta, list_of_ops ["!!"];
+                 `Lefta, list_of_ops ["&&"];
+                 `Nona,  list_of_ops [">="; ">"; "<="; "<"; "=="; "!="];
+                 `Lefta, list_of_ops ["+"; "-"];
+                 `Lefta, list_of_ops ["*"; "/"; "%"]
+               |]
+               primary
+            )
   )
 end
 
@@ -116,7 +135,16 @@ struct
 
   (* Statement parser *)
   ostap (
-    parse: empty {failwith "Not implemented yet"}
+    primary: -"read"  -"(" v:IDENT -")" { Read v }
+           | -"write" -"(" e:!(Expr.parse) -")" { Write e }
+           | v:IDENT -":=" e:!(Expr.parse) { Assign (v, e) };
+    parse: !(Ostap.Util.expr
+               (fun x -> x)
+               [|
+                 `Righta, [ostap (";"), fun x y -> Seq(x, y)]
+               |]
+               primary
+            )
   )
 end
 (* The top-level definitions *)
