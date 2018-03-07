@@ -36,11 +36,6 @@ let eval =
     | _ -> failwith "Bad SM program" in
   List.fold_left eval
 
-let rec compile_expr = function
-  | Expr.Const num -> [CONST num]
-  | Expr.Var var -> [LD var]
-  | Expr.Binop (op, e1, e2) -> compile_expr e1 @ compile_expr e2 @ [BINOP op]
-
 (* Top-level evaluation
 
      val run : prg -> int list -> int list
@@ -56,9 +51,13 @@ let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let rec compile = function
-  | Stmt.Read var -> [READ; ST var]
-  | Stmt.Write expr -> compile_expr expr @ [WRITE]
-  | Stmt.Assign (var, expr) -> compile_expr expr @ [ST var]
-  | Stmt.Seq (stmt1, stmt2) -> compile stmt1 @ compile stmt2
-
+let rec compile =
+  let rec compile_expr = function
+    | Expr.Const num -> [CONST num]
+    | Expr.Var var -> [LD var]
+    | Expr.Binop (op, e1, e2) -> compile_expr e1 @ compile_expr e2 @ [BINOP op]
+  in function
+    | Stmt.Read var -> [READ; ST var]
+    | Stmt.Write expr -> compile_expr expr @ [WRITE]
+    | Stmt.Assign (var, expr) -> compile_expr expr @ [ST var]
+    | Stmt.Seq (stmt1, stmt2) -> compile stmt1 @ compile stmt2
