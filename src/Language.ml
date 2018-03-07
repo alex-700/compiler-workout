@@ -160,7 +160,5 @@ type t = Stmt.t
 *)
 let eval p i =
   let _, _, o = Stmt.eval (Expr.empty, i, []) p in o
-
-(* Top-level parser *)
 let parse = Stmt.parse
 
