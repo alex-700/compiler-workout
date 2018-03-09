@@ -1,0 +1,14 @@
+# structure of compile-workout
+S src
+S src/SM
+S src/Language
+S src/Driver
+S src/X86
+
+D src
+D src/SM
+D src/Language
+D src/Driver
+D src/X86
+
+PKG GT ostap
