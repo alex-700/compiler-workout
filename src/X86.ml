@@ -80,22 +80,44 @@ open SM
 *)
 let compile env =
   let compile env = function
-    | BINOP _ ->
-      failwith "not yet"
-    | CONST v ->
-      let r, env = env#allocate in
-      env, [Mov (L v, r)]
-    | READ ->
-      let r, env = env#allocate in
-      env, [Call "Lread"; Mov (eax, r)]
+    | CONST n ->
+      let s, env = env#allocate in
+      env, [Mov (L n, s)]
     | WRITE ->
-      failwith "not yet"
-    | LD _ ->
-      failwith "not yet"
-    | ST _ ->
-      failwith "not yet"
+      let s, env = env#pop in
+      env, [Push s; Call "Lwrite"; Pop eax]
+    | LD x ->
+      let s, env = (env#global x)#allocate in
+      env, [Mov (M env#loc x, eax); Mov (eax, s)] (*optimize it*)
+    | ST x ->
+      let s, env = (env#global x)#pop in
+      env, [Mov(s, eax); Mov(eax, M env#loc x)]
+    | READ ->
+      let s, env = env#allocate in
+      env, [Push ecx; Call "Lread"; Pop ecx; Mov(eax, s)]
+    | BINOP op ->
+      let y, x, env = env#pop2 in
+      let res, env = env#allocate in
+      let suf = function
+        | ">"  -> "g"
+        | ">=" -> "ge"
+        | "<"  -> "l"
+        | "<=" -> "le"
+        | "==" -> "e"
+        | "!=" -> "ne"
+        | _ -> failwith "unsupported comparing operator" in
+      let cmp r1 r2 = Binop("cmp", r1, r2) in
+      let zero r = Binop("^", r, r) in
+      let i2b r1 r2 suf = [zero r2; cmp r1 r2; Set("ne", suf)] in
+      env, match op with
+      | "+" | "-" | "*" -> [Mov (x, eax); zero edx; Mov (y, edi); Binop(op, edi, eax); Mov(eax, res)]
+      | "/" -> [Mov (x, eax); Cltd; Mov(y, edi); IDiv edi; Mov (eax, res)]
+      | "%" -> [Mov (x, eax); Cltd; Mov(y, edi); IDiv edi; Mov (edx, res)]
+      | ">" | ">=" | "<" | "<=" | "==" | "!=" -> [Mov(x, eax); Mov(y, edi); zero edx; cmp edi eax; Set (suf op, "%dl"); Mov(edx, res)]
+      | "!!" | "&&" -> i2b x eax "%al" @ i2b y edx "%dl" @ [Binop(op, edx, eax); Mov(eax, res)]
+      | _ -> failwith "Unsupported operator"
   in
-  List.fold_left (fun (e, l) i -> let (e, l2) = compile e i in e, l @ l2) (env, [])
+  List.fold_left (fun (e, l) i -> let (e2, l2) = compile e i in (e2, l @ l2)) (env, [])
 
 (* A set of strings *)
 module S = Set.Make (String)
