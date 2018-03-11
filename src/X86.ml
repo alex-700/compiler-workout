@@ -139,7 +139,7 @@ let compile env =
         i2b x eax "%al" @
         i2b y edx "%dl" @
         [Binop(op, edx, eax); Mov(eax, res)]
-      | _ -> failwith "Unsupported operator" in
+      | _ -> failwith "unknown binary operator" in
   List.fold_left (fun (e, o) i -> let (e', o') = compile e i in (e', o @ o')) (env, [])
 
 (* A set of strings *)
