@@ -79,6 +79,9 @@ open SM
    of x86 instructions
 *)
 let compile env =
+  let mov r1 r2 = match r1, r2 with
+    | R _, _ | _, R _ -> [Mov(r1, r2)]
+    | _, _ -> [Mov (r1, eax); Mov (eax, r2)] in
   let compile env = function
     | CONST n ->
       let s, env = env#allocate in
@@ -88,36 +91,56 @@ let compile env =
       env, [Push s; Call "Lwrite"; Pop eax]
     | LD x ->
       let s, env = (env#global x)#allocate in
-      env, [Mov (M env#loc x, eax); Mov (eax, s)] (*optimize it*)
+      env, mov (M env#loc x) s
     | ST x ->
       let s, env = (env#global x)#pop in
-      env, [Mov(s, eax); Mov(eax, M env#loc x)]
+      env, mov s (M env#loc x)
     | READ ->
       let s, env = env#allocate in
-      env, [Push ecx; Call "Lread"; Pop ecx; Mov(eax, s)]
+      env, [Call "Lread"; Mov (eax, s)]
     | BINOP op ->
       let y, x, env = env#pop2 in
       let res, env = env#allocate in
-      let suf = function
+      let suffix_of_op = function
         | ">"  -> "g"
         | ">=" -> "ge"
         | "<"  -> "l"
         | "<=" -> "le"
         | "==" -> "e"
         | "!=" -> "ne"
-        | _ -> failwith "unsupported comparing operator" in
+        | _ -> failwith "unknown comparison operator" in
       let cmp r1 r2 = Binop("cmp", r1, r2) in
       let zero r = Binop("^", r, r) in
-      let i2b r1 r2 suf = [zero r2; cmp r1 r2; Set("ne", suf)] in
+      let i2b r1 r2 suf = [zero r2; cmp r1 r2; Set ("ne", suf)] in
       env, match op with
-      | "+" | "-" | "*" -> [Mov (x, eax); zero edx; Mov (y, edi); Binop(op, edi, eax); Mov(eax, res)]
-      | "/" -> [Mov (x, eax); Cltd; Mov(y, edi); IDiv edi; Mov (eax, res)]
-      | "%" -> [Mov (x, eax); Cltd; Mov(y, edi); IDiv edi; Mov (edx, res)]
-      | ">" | ">=" | "<" | "<=" | "==" | "!=" -> [Mov(x, eax); Mov(y, edi); zero edx; cmp edi eax; Set (suf op, "%dl"); Mov(edx, res)]
-      | "!!" | "&&" -> i2b x eax "%al" @ i2b y edx "%dl" @ [Binop(op, edx, eax); Mov(eax, res)]
-      | _ -> failwith "Unsupported operator"
-  in
-  List.fold_left (fun (e, l) i -> let (e2, l2) = compile e i in (e2, l @ l2)) (env, [])
+      | "+" | "-" | "*" ->
+        [
+          Mov (x, eax);
+          Binop (op, y, eax);
+          Mov (eax, res)
+        ]
+      | "/" | "%" ->
+        [
+          Mov (x, eax);
+          Cltd;
+          Mov (y, edi);
+          IDiv edi;
+          Mov ((if op = "/" then eax else edx), res)
+        ]
+      | ">" | ">=" | "<" | "<=" | "==" | "!=" ->
+        [
+          Mov (x, eax);
+          zero edx;
+          cmp y eax;
+          Set (suffix_of_op op, "%dl");
+          Mov (edx, res)
+        ]
+      | "!!" | "&&" ->
+        i2b x eax "%al" @
+        i2b y edx "%dl" @
+        [Binop(op, edx, eax); Mov(eax, res)]
+      | _ -> failwith "Unsupported operator" in
+  List.fold_left (fun (e, o) i -> let (e', o') = compile e i in (e', o @ o')) (env, [])
 
 (* A set of strings *)
 module S = Set.Make (String)
@@ -137,7 +160,7 @@ class env =
       let x, n =
 	      let rec allocate' = function
 	        | []                            -> ebx     , 0
-	        | (S n)::_                      -> S (n+1) , n+1
+	        | (S n)::_                      -> S (n+1) , 2
 	        | (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
 	        | _                             -> S 0     , 1
 	      in
