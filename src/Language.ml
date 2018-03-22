@@ -134,9 +134,9 @@ struct
 
   (* Statement parser *)
   ostap (
-    primary: -"read"  -"(" v:IDENT -")" { Read v }
-           | -"write" -"(" e:!(Expr.parse) -")" { Write e }
-           | v:IDENT -":=" e:!(Expr.parse) { Assign (v, e) };
+    primary: %"read" "(" v:IDENT ")" { Read v }
+           | %"write" "(" e:!(Expr.parse) ")" { Write e }
+           | v:IDENT ":=" e:!(Expr.parse) { Assign (v, e) };
     parse: !(Ostap.Util.expr
                (fun x -> x)
                [|
