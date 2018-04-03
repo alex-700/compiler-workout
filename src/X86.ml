@@ -43,7 +43,7 @@ type instr =
 (* a label in the code                                  *) | Label of string
 (* a conditional jump                                   *) | CJmp  of string * string
 (* a non-conditional jump                               *) | Jmp   of string
-                                                               
+
 (* Instruction printer *)
 let show instr =
   let binop = function
@@ -104,6 +104,11 @@ let compile env =
     | READ ->
       let s, env = env#allocate in
       env, [Call "Lread"; Mov (eax, s)]
+    | LABEL l -> env, [Label l]
+    | JMP l -> env, [Jmp l]
+    | CJMP (s, l) ->
+      let r, env = env#pop in
+      env, [Mov (r, eax); Binop ("&&", eax, eax); CJmp (s, l)] (* optimize it *)
     | BINOP op ->
       let y, x, env = env#pop2 in
       let res, env = env#allocate in

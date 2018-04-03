@@ -115,12 +115,12 @@ struct
     (* read into the variable           *) | Read   of string
     (* write the value of an expression *) | Write  of Expr.t
     (* assignment                       *) | Assign of string * Expr.t
-    (* composition                      *) | Seq    of t * t 
+    (* composition                      *) | Seq    of t * t
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) (* add yourself *)  with show
-                                                                    
+    (* loop with a post-condition       *) | Repeat of t * Expr.t with show
+
   (* The type of configuration: a state, an input stream, an output stream *)
   type config = Expr.state * int list * int list
 
@@ -130,24 +130,63 @@ struct
 
      Takes a configuration and a statement, and returns another configuration
   *)
-  let rec eval (st, inp, out) = function
+  let rec eval ((st, inp, out) as con) = function
     | Read var -> Expr.update var (List.hd inp) st, List.tl inp, out
     | Write expr -> st, inp, out @ [Expr.eval st expr]
     | Assign (var, expr) -> Expr.update var (Expr.eval st expr) st, inp, out
-    | Seq (expr1, expr2) -> eval (eval (st, inp, out) expr1) expr2
+    | Seq (expr1, expr2) -> eval (eval con expr1) expr2
+    | Skip -> con
+    | If (expr1, stmt1, stmt2) ->
+      eval con (if Expr.bool_of_int (Expr.eval st expr1) then stmt1 else stmt2)
+    | (While (expr, stmt)) as wh  ->
+      if Expr.bool_of_int (Expr.eval st expr)
+      then eval (eval con stmt) wh
+      else con
+    | (Repeat (stmt, expr)) as rp ->
+      let (st, _, _) as con = eval con stmt in
+      if Expr.bool_of_int (Expr.eval st expr)
+      then con
+      else eval con rp
+
+  let rec seq = function
+    | [] -> Skip
+    | hd::[] -> hd
+    | hd::tl -> Seq(hd, seq tl) (* may be unnecessary*)
+  let rec sum a b = match a with
+    | Seq(x, y) -> Seq(x, sum y b)
+    | _ -> Seq(a, b)
+  let default x = function
+    | None -> x
+    | Some a -> a
 
   (* Statement parser *)
   ostap (
-    primary: %"read" "(" v:IDENT ")" { Read v }
-           | %"write" "(" e:!(Expr.parse) ")" { Write e }
-           | v:IDENT ":=" e:!(Expr.parse) { Assign (v, e) };
+    primary: %"read"  "("  v:IDENT         ")" { Read v }
+           | %"write" "("  e:!(Expr.parse) ")" { Write e }
+           | v:IDENT  ":=" e:!(Expr.parse)     { Assign (v, e) }
+           | %"if" e:!(Expr.parse) %"then" s:parse
+             elif:( %"elif" !(Expr.parse) %"then" parse)*
+             se: ( x:( %"else" parse )? { default Skip x } )
+             %"fi"
+             {
+               List.fold_right (fun (e, s) s' -> If (e, s, s')) ((e, s)::elif) se
+             }
+           | %"skip" { Skip }
+           | %"while" e:!(Expr.parse) %"do"
+             s:parse
+             %"od" { While (e, s) }
+           | %"for" s1:parse "," e:!(Expr.parse) "," s2:parse %"do"
+             s3:parse
+             %"od" { sum s1 @@ While (e, sum s3 s2) }
+           | %"repeat" s:parse %"until" e:!(Expr.parse) { Repeat (s, e) };
+
     parse: !(Ostap.Util.expr
-               (fun x -> x)
-               [|
-                 `Righta, [ostap (";"), fun x y -> Seq(x, y)]
-               |]
-               primary
-            )
+      (fun x -> x)
+      [|
+        `Righta, [ostap (";"), fun x y -> Seq(x, y)]
+      |]
+      primary
+    )
   )
 end
 (* The top-level definitions *)
@@ -166,4 +205,3 @@ let eval p i =
 
 (* Top-level parser *)
 let parse = Stmt.parse
-

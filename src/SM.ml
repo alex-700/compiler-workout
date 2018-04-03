@@ -8,11 +8,11 @@ open Language
 (* read to stack                   *) | READ
 (* write from stack                *) | WRITE
 (* load a variable to the stack    *) | LD    of string
-(* store a variable from the stack *) | ST    of string
+(* store a variable from the stack *) | ST   of string
 (* a label                         *) | LABEL of string
-(* unconditional jump              *) | JMP   of string                                                                                                                
+(* unconditional jump              *) | JMP   of string
 (* conditional jump                *) | CJMP  of string * string with show
-                                                   
+
 (* The type for the stack machine program *)
 type prg = insn list
 
@@ -27,17 +27,32 @@ type config = int list * Stmt.config
 
    Takes a configuration and a program, and returns a configuration as a result
 *)
-let eval =
-  let eval con stmt =
-    match stmt, con with
-    | BINOP op, (y::x::stack, scon) -> Expr.op_of_string op x y::stack, scon
-    | CONST num, (stack, scon) -> num::stack, scon
-    | READ, (stack, (st, num::inp, out)) -> num::stack, (st, inp, out)
-    | WRITE, (num::stack, (st, inp, out)) -> stack, (st, inp, out @ [num])
-    | LD var, (stack, (st, inp, out)) -> st var::stack, (st, inp, out)
-    | ST var, (num::stack, (st, inp, out)) -> stack, (Expr.update var num st, inp, out)
+let rec eval env con =
+  let flag = function
+    | "z"  -> true
+    | "nz" -> false
+    | _    -> failwith "Bad conditional jump" in
+  function
+  | [] -> con
+  | stmt::prog ->
+    let ncon, nprog = match stmt, con with
+    | BINOP op, (y::x::stack, scon) -> (Expr.op_of_string op x y::stack, scon), prog
+    | CONST num, (stack, scon) -> (num::stack, scon), prog
+    | READ, (stack, (st, num::inp, out)) -> (num::stack, (st, inp, out)), prog
+    | WRITE, (num::stack, (st, inp, out)) -> (stack, (st, inp, out @ [num])), prog
+    | LD var, (stack, (st, inp, out)) -> (st var::stack, (st, inp, out)), prog
+    | ST var, (num::stack, (st, inp, out)) -> (stack, (Expr.update var num st, inp, out)), prog
+    | LABEL _, _ -> con, prog
+    | JMP label, _ -> con, (env#labeled label)
+    | CJMP (f, label), (x::stack, scon) ->
+      (stack, scon),
+      (
+        if flag f <> Expr.bool_of_int x
+        then env#labeled label
+        else prog
+      )
     | _ -> failwith "Bad SM program" in
-  List.fold_left eval
+    eval env ncon nprog
 
 (* Top-level evaluation
 
@@ -62,13 +77,51 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let rec compile =
+
+class lenv =
+  let name num = "label" ^ (string_of_int num) in
+  object
+    val cnt = 0
+    method gen2 = name cnt, name @@ cnt + 1, {< cnt = cnt + 2 >}
+    method gen1 = name cnt, {< cnt = cnt + 1 >}
+  end
+
+let compile prog =
   let rec compile_expr = function
     | Expr.Const num -> [CONST num]
     | Expr.Var var -> [LD var]
-    | Expr.Binop (op, e1, e2) -> compile_expr e1 @ compile_expr e2 @ [BINOP op]
-  in function
-    | Stmt.Read var -> [READ; ST var]
-    | Stmt.Write expr -> compile_expr expr @ [WRITE]
-    | Stmt.Assign (var, expr) -> compile_expr expr @ [ST var]
-    | Stmt.Seq (stmt1, stmt2) -> compile stmt1 @ compile stmt2
+    | Expr.Binop (op, e1, e2) -> compile_expr e1 @ compile_expr e2 @ [BINOP op] in
+  let rec compile' env = function
+    | Stmt.Read var -> env, [READ; ST var]
+    | Stmt.Write expr -> env, compile_expr expr @ [WRITE]
+    | Stmt.Assign (var, expr) -> env, compile_expr expr @ [ST var]
+    | Stmt.Seq (stmt1, stmt2) -> (env, []) >>. stmt1 >>. stmt2
+    | Stmt.Skip -> env, []
+    | Stmt.If (e, s1, s2) ->
+      let l1, l2, env = env#gen2 in
+      (env, compile_expr e) >>
+      [CJMP ("z", l1)]      >>.
+      s1                    >>
+      [JMP l2; LABEL l1]    >>.
+      s2                    >>
+      [LABEL l2]
+    | Stmt.While (e, s) ->
+      let l1, l2, env = env#gen2 in
+      (env, [JMP l2; LABEL l1]) >>.
+      s                         >>
+      [LABEL l2]                >>
+      compile_expr e            >>
+      [CJMP ("nz", l1)]
+    | Stmt.Repeat (s, e) ->
+      let l1, env = env#gen1 in
+      (env, [LABEL l1]) >>.
+      s                 >>
+      compile_expr e    >>
+      [CJMP ("z", l1)]
+  and
+    (>>) (env, l) e = env, l @ e
+  and
+    (>>.) (env, l) s = let env', l' = compile' env s in env', l @ l'
+  in
+  snd @@ (compile' (new lenv) prog)
+
