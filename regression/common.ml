@@ -1,8 +1,8 @@
 open GT
 open Syntax
-       
+
 let conj = (&&)
-             
+
 open Embedding
 
 let state ps = List.fold_right (fun (x, v) (s, p) -> Expr.update x v s, (x =:= !? v) :: p) ps (Expr.empty, [])

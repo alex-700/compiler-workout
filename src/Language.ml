@@ -4,114 +4,192 @@
 open GT
 
 (* Opening a library for combinator-based syntax analysis *)
-open Ostap
-open Combinators
-                         
-(* States *)
-module State =
-  struct
-                                                                
-    (* State: global state, local state, scope variables *)
-    type t = {g : string -> int; l : string -> int; scope : string list}
+open Ostap.Combinators
 
-    (* Empty state *)
-    let empty = failwith "Not implemented"
-
-    (* Update: non-destructively "modifies" the state s by binding the variable x 
-       to value v and returns the new state w.r.t. a scope
-    *)
-    let update x v s = failwith "Not implemented"
-                                
-    (* Evals a variable in a state w.r.t. a scope *)
-    let eval s x = failwith "Not implemented" 
-
-    (* Creates a new scope, based on a given state *)
-    let enter st xs = failwith "Not implemented"
-
-    (* Drops a scope *)
-    let leave st st' = failwith "Not implemented"
-
-  end
-    
 (* Simple expressions: syntax and semantics *)
 module Expr =
-  struct
-    
-    (* The type for expressions. Note, in regular OCaml there is no "@type..." 
-       notation, it came from GT. 
-    *)
-    @type t =
-    (* integer constant *) | Const of int
-    (* variable         *) | Var   of string
-    (* binary operator  *) | Binop of string * t * t with show
+struct
 
-    (* Available binary operators:
-        !!                   --- disjunction
-        &&                   --- conjunction
-        ==, !=, <=, <, >=, > --- comparisons
-        +, -                 --- addition, subtraction
-        *, /, %              --- multiplication, division, reminder
-    *)
-      
-    (* Expression evaluator
+  (* The type for expressions. Note, in regular OCaml there is no "@type..."
+     notation, it came from GT.
+  *)
+  @type t =
+  (* integer constant *) | Const of int
+  (* variable         *) | Var   of string
+  (* binary operator  *) | Binop of string * t * t with show
 
-          val eval : state -> t -> int
- 
-       Takes a state and an expression, and returns the value of the expression in 
-       the given state.
-    *)                                                       
-    let eval st expr = failwith "Not implemented"      
+  (* Available binary operators:
+      !!                   --- disjunction
+      &&                   --- conjunction
+      ==, !=, <=, <, >=, > --- comparisons
+      +, -                 --- addition, subtraction
+      *, /, %              --- multiplication, division, reminder
+  *)
 
-    (* Expression parser. You can use the following terminals:
+  (* State: a partial map from variables to integer values. *)
+  type state = string -> int
 
-         IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
-         DECIMAL --- a decimal constant [0-9]+ as a string
-                                                                                                                  
-    *)
-    ostap (                                      
-      parse: empty {failwith "Not implemented"}
-    )
-    
-  end
-                    
+  (* Empty state: maps every variable into nothing. *)
+  let empty = fun x -> failwith (Printf.sprintf "Undefined variable %s" x)
+
+  (* Update: non-destructively "modifies" the state s by binding the variable x
+     to value v and returns the new state.
+  *)
+  let update x v s = fun y -> if x = y then v else s y
+
+  let (@.) f g x y = f @@ g x y
+
+  let (@..) f g x y = f (g x) (g y)
+
+  let bool_of_int = (<>) 0
+
+  let int_of_bool x = if x then 1 else 0
+
+  let op_of_string op =
+    match op with
+    | "+" -> (+)
+    | "-" -> (-)
+    | "*" -> ( * )
+    | "/" -> (/)
+    | "%" -> (mod)
+    | _ ->
+      let bool_op =
+        match op with
+        | ">" -> (>)
+        | "<" -> (<)
+        | ">=" -> (>=)
+        | "<=" -> (<=)
+        | "==" -> (=)
+        | "!=" -> (<>)
+        | "!!" -> (||) @.. bool_of_int
+        | "&&" -> (&&) @.. bool_of_int
+        | _ -> failwith "Unsupported operation" in
+      int_of_bool @. bool_op
+
+  (* Expression evaluator
+
+        val eval : state -> t -> int
+     Takes a state and an expression, and returns the value of the expression in
+     the given state.
+  *)
+  let rec eval s = function
+    | Const x -> x
+    | Var x -> s x
+    | Binop(op, l, r) -> (op_of_string op @.. eval s) l r
+
+  (* Expression parser. You can use the following terminals:
+
+       IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
+       DECIMAL --- a decimal constant [0-9]+ as a string
+  *)
+
+  let construct_op s = fun x y -> Binop(s, x, y)
+
+  (* I can't apply eta conversion here, because weak types cannot appear in translation units.
+     Seriously, OCaml?
+  *)
+  let list_of_ops l = List.map (fun s -> (ostap ($(s)), construct_op s)) l
+
+  ostap (
+    primary: x:IDENT {Var x} | x:DECIMAL {Const x} | -"(" parse -")";
+    parse: !(Ostap.Util.expr
+               (fun x -> x)
+               [|
+                 `Lefta, list_of_ops ["!!"];
+                 `Lefta, list_of_ops ["&&"];
+                 `Nona,  list_of_ops [">="; ">"; "<="; "<"; "=="; "!="];
+                 `Lefta, list_of_ops ["+"; "-"];
+                 `Lefta, list_of_ops ["*"; "/"; "%"]
+               |]
+               primary
+            )
+  )
+end
 (* Simple statements: syntax and sematics *)
 module Stmt =
-  struct
+struct
 
     (* The type for statements *)
     @type t =
     (* read into the variable           *) | Read   of string
     (* write the value of an expression *) | Write  of Expr.t
     (* assignment                       *) | Assign of string * Expr.t
-    (* composition                      *) | Seq    of t * t 
+    (* composition                      *) | Seq    of t * t
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
     (* loop with a post-condition       *) | Repeat of t * Expr.t
     (* call a procedure                 *) | Call   of string * Expr.t list with show
-                                                                    
-    (* The type of configuration: a state, an input stream, an output stream *)
     type config = State.t * int list * int list 
 
-    (* Statement evaluator
+  (* The type of configuration: a state, an input stream, an output stream *)
+  type config = Expr.state * int list * int list
 
-         val eval : env -> config -> t -> config
+  (* Statement evaluator
 
-       Takes an environment, a configuration and a statement, and returns another configuration. The 
-       environment supplies the following method
+        val eval : config -> t -> config
 
-           method definition : string -> (string list, string list, t)
+     Takes a configuration and a statement, and returns another configuration
+  *)
+  let rec eval ((st, inp, out) as con) = function
+    | Read var -> Expr.update var (List.hd inp) st, List.tl inp, out
+    | Write expr -> st, inp, out @ [Expr.eval st expr]
+    | Assign (var, expr) -> Expr.update var (Expr.eval st expr) st, inp, out
+    | Seq (expr1, expr2) -> eval (eval con expr1) expr2
+    | Skip -> con
+    | If (expr1, stmt1, stmt2) ->
+      eval con (if Expr.bool_of_int (Expr.eval st expr1) then stmt1 else stmt2)
+    | (While (expr, stmt)) as wh  ->
+      if Expr.bool_of_int (Expr.eval st expr)
+      then eval (eval con stmt) wh
+      else con
+    | (Repeat (stmt, expr)) as rp ->
+      let (st, _, _) as con = eval con stmt in
+      if Expr.bool_of_int (Expr.eval st expr)
+      then con
+      else eval con rp
 
-       which returns a list of formal parameters, local variables, and a body for given definition
-    *)
-    let eval env ((st, i, o) as conf) stmt = failwith "Not implemented"
-                                
-    (* Statement parser *)
-    ostap (
-      parse: empty {failwith "Not implemented"}
+  let rec seq = function
+    | [] -> Skip
+    | hd::[] -> hd
+    | hd::tl -> Seq(hd, seq tl) (* may be unnecessary*)
+  let rec sum a b = match a with
+    | Seq(x, y) -> Seq(x, sum y b)
+    | _ -> Seq(a, b)
+  let default x = function
+    | None -> x
+    | Some a -> a
+
+  (* Statement parser *)
+  ostap (
+    primary: %"read"  "("  v:IDENT         ")" { Read v }
+           | %"write" "("  e:!(Expr.parse) ")" { Write e }
+           | v:IDENT  ":=" e:!(Expr.parse)     { Assign (v, e) }
+           | %"if" e:!(Expr.parse) %"then" s:parse
+             elif:( %"elif" !(Expr.parse) %"then" parse)*
+             se: ( x:( %"else" parse )? { default Skip x } )
+             %"fi"
+             {
+               List.fold_right (fun (e, s) s' -> If (e, s, s')) ((e, s)::elif) se
+             }
+           | %"skip" { Skip }
+           | %"while" e:!(Expr.parse) %"do"
+             s:parse
+             %"od" { While (e, s) }
+           | %"for" s1:parse "," e:!(Expr.parse) "," s2:parse %"do"
+             s3:parse
+             %"od" { sum s1 @@ While (e, sum s3 s2) }
+           | %"repeat" s:parse %"until" e:!(Expr.parse) { Repeat (s, e) };
+
+    parse: !(Ostap.Util.expr
+      (fun x -> x)
+      [|
+        `Righta, [ostap (";"), fun x y -> Seq(x, y)]
+      |]
+      primary
     )
-      
-  end
+  )
+end
 
 (* Function and procedure definitions *)
 module Definition =
@@ -140,4 +218,4 @@ type t = Definition.t list * Stmt.t
 let eval (defs, body) i = failwith "Not implemented"
                                    
 (* Top-level parser *)
-let parse = failwith "Not implemented"
+let parse = Stmt.parse
