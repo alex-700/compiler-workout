@@ -16,7 +16,9 @@ let parse infile =
     "od";
     "for";
     "repeat";
-    "until"
+    "until";
+    "fun";
+    "local"
   ] in
   Util.parse
     (object
@@ -42,25 +44,27 @@ let main =
     | `Ok prog ->
       if to_compile
       then failwith "Not implemented yet"
-        (*            
+        (*
         let basename = Filename.chop_suffix infile ".expr" in
         ignore @@ X86.build prog basename
         *)
-      else 
-	let rec read acc =
-	  try
-	    let r = read_int () in
-	    Printf.printf "> ";
-	    read (acc @ [r])
-          with End_of_file -> acc
+      else
+	      let rec read acc =
+	       try
+	        let r = read_int () in
+	       Printf.printf "> ";
+	       read (acc @ [r])
+        with End_of_file -> acc
+	     in
+	    let input = read [] in
+	    let output =
+       if interpret
+	     then Language.eval prog input
+	    else
+       let stmt = SM.compile prog in
+       SM.run stmt input
 	in
-	let input = read [] in
-	let output =
-	  if interpret
-	  then Language.eval prog input
-	  else SM.run (SM.compile prog) input
-	in
-	List.iter (fun i -> Printf.printf "%d\n" i) output
+  List.iter (fun i -> Printf.printf "%d\n" i) output
     | `Fail er -> Printf.eprintf "Syntax error: %s\n" er
   with Invalid_argument _ ->
     Printf.printf "Usage: rc [-i | -s] <input file.expr>\n"

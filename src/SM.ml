@@ -30,35 +30,46 @@ type config = (prg * State.t) list * int list * Stmt.config
 
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
-*)                         
-let eval env ((cstack, stack, ((st, i, o) as c)) as conf) = failwith "Not implemented"
-
-let rec eval env con =
+*)
+let rec eval env ((cstack, stack, con) as conf) =
   let flag = function
     | "z"  -> true
     | "nz" -> false
     | _    -> failwith "Bad conditional jump" in
   function
-  | [] -> con
+  | [] -> conf
   | stmt::prog ->
-    let ncon, nprog = match stmt, con with
-    | BINOP op, (y::x::stack, scon) -> (Expr.op_of_string op x y::stack, scon), prog
-    | CONST num, (stack, scon) -> (num::stack, scon), prog
-    | READ, (stack, (st, num::inp, out)) -> (num::stack, (st, inp, out)), prog
-    | WRITE, (num::stack, (st, inp, out)) -> (stack, (st, inp, out @ [num])), prog
-    | LD var, (stack, (st, inp, out)) -> (st var::stack, (st, inp, out)), prog
-    | ST var, (num::stack, (st, inp, out)) -> (stack, (Expr.update var num st, inp, out)), prog
-    | LABEL _, _ -> con, prog
-    | JMP label, _ -> con, (env#labeled label)
-    | CJMP (f, label), (x::stack, scon) ->
-      (stack, scon),
+    let con', prog' = match stmt, stack, con with
+    | BINOP op,    y::x::stack, _             -> (cstack, Expr.op_of_string op x y::stack, con), prog
+    | CONST n,     _,           _             -> (cstack, n::stack, con),                        prog
+    | READ,        _,           (st, n::i, o) -> (cstack, n::stack, (st, i, o)),                 prog
+    | WRITE,       n::stack,    (st, i, o)    -> (cstack, stack, (st, i, o @ [n])),              prog
+    | LD v,        _,           (st, i, o)    -> (cstack, State.eval st v::stack, (st, i, o)),   prog
+    | ST v,        n::stack,    (st, i, o)    -> (cstack, stack, (State.update v n st, i, o)),   prog
+    | LABEL _,     _,           _             -> conf, prog
+    | JMP l,       _,           _             -> conf, (env#labeled l)
+    | CJMP (f, l), n::stack,    _             ->
+      (cstack, stack, con),
       (
-        if flag f <> Expr.bool_of_int x
-        then env#labeled label
+        if flag f <> Expr.bool_of_int n
+        then env#labeled l
         else prog
       )
+    | CALL l,      _,           (st, _, _)    -> ((prog, st)::cstack, stack, con), (env#labeled l)
+    | BEGIN (args, locs), _,    (st, i, o)    ->
+      let rec build (acc : State.t) s a = match (s, a) with
+        | _,     []    -> acc, s
+        | v::s', x::a' -> build (State.update x v acc) s' a'
+        | [],    _     -> failwith "few arguments on stack" in
+      let st' = State.enter st (args @ locs) in
+      let st'', stack' = build st' stack (List.rev args) in
+      (cstack, stack', (st'', i, o)), prog
+    | END,         _,           (st, i, o)    ->
+      (match cstack with
+      | (p', st')::cstack' -> (cstack', stack, (State.leave st st', i, o)), p'
+      | _ -> conf, [])
     | _ -> failwith "Bad SM program" in
-    eval env ncon nprog
+    eval env con' prog'
 
 (* Top-level evaluation
 
@@ -83,17 +94,19 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let compile (defs, p) = failwith "Not implemented"s
+let compile (defs, p) = failwith "Not implemented"
+
+let label_of_name = (^) "l_"
 
 class lenv =
-  let name num = "label" ^ (string_of_int num) in
+  let name num = label_of_name (string_of_int num) in
   object
     val cnt = 0
     method gen2 = name cnt, name @@ cnt + 1, {< cnt = cnt + 2 >}
     method gen1 = name cnt, {< cnt = cnt + 1 >}
   end
 
-let compile prog =
+let compile (defs, prog) =
   let rec compile_expr = function
     | Expr.Const num -> [CONST num]
     | Expr.Var var -> [LD var]
@@ -125,9 +138,22 @@ let compile prog =
       s                 >>
       compile_expr e    >>
       [CJMP ("z", l1)]
+    | Stmt.Call (name, args) ->
+      env, (List.concat @@ List.rev_map compile_expr args) @ [CALL (label_of_name name)]
   and
     (>>) (env, l) e = env, l @ e
   and
     (>>.) (env, l) s = let env', l' = compile' env s in env', l @ l'
   in
-  snd @@ (compile' (new lenv) prog)
+  let compile_def env (name, (args, locs, body)) =
+    (env, []) >> [LABEL (label_of_name name); BEGIN (args, locs)] >>. body >> [END] in
+  let env, def_code = List.fold_left
+      (
+        fun (env, code) (name, decl) ->
+          let env, code' = compile_def env (name, decl) in
+          env, code @ code'
+      )
+      (new lenv, [])
+      defs in
+  [LABEL "main"] @ (snd @@ (compile' env prog)) @ [END] @ def_code
+

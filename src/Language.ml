@@ -5,7 +5,41 @@ open GT
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
+open Ostap
 
+(* States *)
+module State =
+struct
+
+  (* State: global state, local state, scope variables *)
+  type t = { g : string -> int; l : string -> int; scope : string list }
+
+  let empty' = fun x -> failwith (Printf.sprintf "Undefined variable %s" x)
+
+  let update' s x v = fun y -> if x = y then v else s y
+
+  (* Empty state *)
+  let empty =
+    { g = empty'; l = empty'; scope = [] }
+
+  (* Update: non-destructively "modifies" the state s by binding the variable x
+       to value v and returns the new state w.r.t. a scope
+  *)
+  let update x v s =
+    if List.mem x s.scope
+    then { s with l = update' s.l x v }
+    else { s with g = update' s.g x v }
+
+  (* Evals a variable in a state w.r.t. a scope *)
+  let eval s x = (if List.mem x s.scope then s.l else s.g) x
+
+  (* Creates a new scope, based on a given state *)
+  let enter ?(ls=empty') st xs = { g = st.g; l = ls; scope = xs }
+
+  (* Drops a scope *)
+  let leave st st' = { st' with g = st.g }
+
+end
 (* Simple expressions: syntax and semantics *)
 module Expr =
 struct
@@ -25,17 +59,6 @@ struct
       +, -                 --- addition, subtraction
       *, /, %              --- multiplication, division, reminder
   *)
-
-  (* State: a partial map from variables to integer values. *)
-  type state = string -> int
-
-  (* Empty state: maps every variable into nothing. *)
-  let empty = fun x -> failwith (Printf.sprintf "Undefined variable %s" x)
-
-  (* Update: non-destructively "modifies" the state s by binding the variable x
-     to value v and returns the new state.
-  *)
-  let update x v s = fun y -> if x = y then v else s y
 
   let (@.) f g x y = f @@ g x y
 
@@ -74,7 +97,7 @@ struct
   *)
   let rec eval s = function
     | Const x -> x
-    | Var x -> s x
+    | Var x -> State.eval s x
     | Binop(op, l, r) -> (op_of_string op @.. eval s) l r
 
   (* Expression parser. You can use the following terminals:
@@ -105,49 +128,68 @@ struct
             )
   )
 end
+
+
 (* Simple statements: syntax and sematics *)
 module Stmt =
 struct
 
-    (* The type for statements *)
-    @type t =
-    (* read into the variable           *) | Read   of string
-    (* write the value of an expression *) | Write  of Expr.t
-    (* assignment                       *) | Assign of string * Expr.t
-    (* composition                      *) | Seq    of t * t
-    (* empty statement                  *) | Skip
-    (* conditional                      *) | If     of Expr.t * t * t
-    (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) | Repeat of t * Expr.t
-    (* call a procedure                 *) | Call   of string * Expr.t list with show
-    type config = State.t * int list * int list 
+  (* The type for statements *)
+  @type t =
+  (* read into the variable           *) | Read   of string
+  (* write the value of an expression *) | Write  of Expr.t
+  (* assignment                       *) | Assign of string * Expr.t
+  (* composition                      *) | Seq    of t * t
+  (* empty statement                  *) | Skip
+  (* conditional                      *) | If     of Expr.t * t * t
+  (* loop with a pre-condition        *) | While  of Expr.t * t
+  (* loop with a post-condition       *) | Repeat of t * Expr.t
+  (* call a procedure                 *) | Call   of string * Expr.t list with show
 
   (* The type of configuration: a state, an input stream, an output stream *)
-  type config = Expr.state * int list * int list
+  type config = State.t * int list * int list
 
   (* Statement evaluator
 
-        val eval : config -> t -> config
+       val eval : env -> config -> t -> config
 
-     Takes a configuration and a statement, and returns another configuration
+     Takes an environment, a configuration and a statement, and returns another configuration. The
+     environment supplies the following method
+
+         method definition : string -> (string list, string list, t)
+
+     which returns a list of formal parameters, local variables, and a body for given definition
   *)
-  let rec eval ((st, inp, out) as con) = function
-    | Read var -> Expr.update var (List.hd inp) st, List.tl inp, out
+  let rec eval env ((st, inp, out) as con) =
+    let eval' = eval env in
+    function
+    | Read var -> State.update var (List.hd inp) st, List.tl inp, out
     | Write expr -> st, inp, out @ [Expr.eval st expr]
-    | Assign (var, expr) -> Expr.update var (Expr.eval st expr) st, inp, out
-    | Seq (expr1, expr2) -> eval (eval con expr1) expr2
+    | Assign (var, expr) -> State.update var (Expr.eval st expr) st, inp, out
+    | Seq (expr1, expr2) -> eval' (eval' con expr1) expr2
     | Skip -> con
     | If (expr1, stmt1, stmt2) ->
-      eval con (if Expr.bool_of_int (Expr.eval st expr1) then stmt1 else stmt2)
-    | (While (expr, stmt)) as wh  ->
+      eval' con (if Expr.bool_of_int (Expr.eval st expr1) then stmt1 else stmt2)
+    | (While (expr, stmt)) as wh ->
       if Expr.bool_of_int (Expr.eval st expr)
-      then eval (eval con stmt) wh
+      then eval' (eval' con stmt) wh
       else con
     | (Repeat (stmt, expr)) as rp ->
-      let (st, _, _) as con = eval con stmt in
+      let (st, _, _) as con = eval' con stmt in
       if Expr.bool_of_int (Expr.eval st expr)
       then con
-      else eval con rp
+      else eval' con rp
+    | Call (name, vars) ->
+      let args, locs, body = env name in
+      let st' = State.enter st (args@locs) ~ls:(
+          List.fold_left2
+            State.update'
+            State.empty'
+            args
+            (List.map (Expr.eval st) vars)
+      ) in
+      let (st'', inp', out') = eval' (st', inp, out) body in
+      State.leave st'' st, inp', out'
 
   let rec seq = function
     | [] -> Skip
@@ -179,7 +221,8 @@ struct
            | %"for" s1:parse "," e:!(Expr.parse) "," s2:parse %"do"
              s3:parse
              %"od" { sum s1 @@ While (e, sum s3 s2) }
-           | %"repeat" s:parse %"until" e:!(Expr.parse) { Repeat (s, e) };
+           | %"repeat" s:parse %"until" e:!(Expr.parse) { Repeat (s, e) }
+           | name: IDENT "(" args:!(Util.list0)[Expr.parse] ")" { Call (name, args) };
 
     parse: !(Ostap.Util.expr
       (fun x -> x)
@@ -193,21 +236,24 @@ end
 
 (* Function and procedure definitions *)
 module Definition =
-  struct
+struct
+  (* The type for a definition: name, argument list, local variables, body *)
+  type t = string * (string list * string list * Stmt.t)
 
-    (* The type for a definition: name, argument list, local variables, body *)
-    type t = string * (string list * string list * Stmt.t)
+  ostap (
+  arg : IDENT;
+  parse: %"fun" name:IDENT "(" vars:!(Util.list0 arg) ")"
+         locs:(%"local" !(Util.list0 arg))?
+         "{"
+         body:!(Stmt.parse)
+         "}" { ( name, (vars, Stmt.default [] locs, body) )}
+  )
+end
 
-    ostap (
-      parse: empty {failwith "Not implemented"}
-    )
-
-  end
-    
 (* The top-level definitions *)
 
 (* The top-level syntax category is a pair of definition list and statement (program body) *)
-type t = Definition.t list * Stmt.t    
+type t = Definition.t list * Stmt.t
 
 (* Top-level evaluator
 
@@ -215,7 +261,11 @@ type t = Definition.t list * Stmt.t
 
    Takes a program and its input stream, and returns the output stream
 *)
-let eval (defs, body) i = failwith "Not implemented"
-                                   
+let eval (defs, body) i =
+  let env name = List.assoc name defs in
+  let (_, _, o) = Stmt.eval env (State.empty, i, []) body in
+  o
+
 (* Top-level parser *)
-let parse = Stmt.parse
+let parse = ostap ( !(Definition.parse)* !(Stmt.parse) )
+
