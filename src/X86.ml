@@ -3,20 +3,20 @@
 (* The registers: *)
 let regs = [|"%ebx"; "%ecx"; "%esi"; "%edi"; "%eax"; "%edx"; "%ebp"; "%esp"|]
 
-(* We can not freely operate with all register; only 3 by now *)                    
+(* We can not freely operate with all register; only 3 by now *)
 let num_of_regs = Array.length regs - 5
 
 (* We need to know the word size to calculate offsets correctly *)
 let word_size = 4
 
 (* We need to distinguish the following operand types: *)
-type opnd = 
-| R of int     (* hard register                    *)
-| S of int     (* a position on the hardware stack *)
-| M of string  (* a named memory location          *)
-| L of int     (* an immediate operand             *)
+type opnd =
+  | R of int     (* hard register                    *)
+  | S of int     (* a position on the hardware stack *)
+  | M of string  (* a named memory location          *)
+  | L of int     (* an immediate operand             *)
 
-(* For convenience we define the following synonyms for the registers: *)         
+(* For convenience we define the following synonyms for the registers: *)
 let ebx = R 0
 let ecx = R 1
 let esi = R 2
@@ -34,7 +34,7 @@ type instr =
 (* x86 integer division, see instruction set reference  *) | IDiv  of opnd
 (* see instruction set reference                        *) | Cltd
 (* sets a value from flags; the first operand is the    *) | Set   of string * string
-(* suffix, which determines the value being set, the    *)                     
+(* suffix, which determines the value being set, the    *)
 (* the second --- (sub)register name                    *)
 (* pushes the operand on the hardware stack             *) | Push  of opnd
 (* pops from the hardware stack to the operand          *) | Pop   of opnd
@@ -44,19 +44,18 @@ type instr =
 (* a conditional jump                                   *) | CJmp  of string * string
 (* a non-conditional jump                               *) | Jmp   of string
 (* directive                                            *) | Meta  of string
-                                                                            
+
 (* Instruction printer *)
 let show instr =
   let binop = function
-  | "+"   -> "addl"
-  | "-"   -> "subl"
-  | "*"   -> "imull"
-  | "&&"  -> "andl"
-  | "!!"  -> "orl" 
-  | "^"   -> "xorl"
-  | "cmp" -> "cmpl"
-  | _     -> failwith "unknown binary operator"
-  in
+    | "+"   -> "addl"
+    | "-"   -> "subl"
+    | "*"   -> "imull"
+    | "&&"  -> "andl"
+    | "!!"  -> "orl"
+    | "^"   -> "xorl"
+    | "cmp" -> "cmpl"
+    | _     -> failwith "unknown binary operator" in
   let opnd = function
   | R i -> regs.(i)
   | S i -> if i >= 0
@@ -90,14 +89,121 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code = failwith "Not implemented"
-                                
-(* A set of strings *)           
+let compile env =
+  let mov r1 r2 = match r1, r2 with
+    | R _, _ | _, R _ -> [Mov(r1, r2)]
+    | _, _ -> [Mov (r1, eax); Mov (eax, r2)] in
+  let compile env = function
+    | CONST n ->
+      let s, env = env#allocate in
+      env, [Mov (L n, s)]
+    | WRITE ->
+      let s, env = env#pop in
+      env, [Push s; Call "Lwrite"; Pop eax]
+    | LD x ->
+      let s, env = (env#global x)#allocate in
+      env, mov (env#loc x) s
+    | ST x ->
+      let s, env = (env#global x)#pop in
+      env, mov s (env#loc x)
+    | READ ->
+      let s, env = env#allocate in
+      env, [Call "Lread"; Mov (eax, s)]
+    | LABEL l -> env, [Label l]
+    | JMP l -> env, [Jmp l]
+    | CJMP (s, l) ->
+      let r, env = env#pop in
+      env, [Mov (r, eax); Binop ("&&", eax, eax); CJmp (s, l)] (* optimize it *)
+    | BEGIN (name, args, locs) ->
+      let env = env#enter name args locs in
+      env, [Push ebp; Mov(esp, ebp); Binop("-", M ("$" ^ env#lsize), esp)]
+    | END -> env, [
+        Label env#epilogue;
+        Mov (ebp, esp);
+        Pop ebp;
+        Ret;
+        Meta (Printf.sprintf "\t.set\t%s,\t%d" env#lsize (env#allocated * word_size))
+      ]
+    | RET r ->
+      (if r then
+        let r, env = env#pop in
+        env, [Mov(r, eax); Jmp env#epilogue]
+      else
+        env, [Jmp env#epilogue])
+    | CALL (name, n, r) ->
+      let save_regs = List.map (fun x -> Push x) env#live_registers in
+      let load_regs = List.rev_map (fun x -> Pop x) env#live_registers in
+      let rev_args, env = env#popn n in
+      let push_args = List.map (fun x -> Push x) rev_args in
+      let result, env =
+        (if r then let reg, env = env#allocate in [Mov(eax, reg)], env else [], env) in
+      env,
+      save_regs @
+      push_args @
+      [Call name; Binop ("+", L (n * word_size), esp)] @
+      load_regs @
+      result
+    | BINOP op ->
+      let y, x, env = env#pop2 in
+      let res, env = env#allocate in
+      let suffix_of_op = function
+        | ">"  -> "g"
+        | ">=" -> "ge"
+        | "<"  -> "l"
+        | "<=" -> "le"
+        | "==" -> "e"
+        | "!=" -> "ne"
+        | _ -> failwith "unknown comparison operator" in
+      let cmp r1 r2 = Binop("cmp", r1, r2) in
+      let zero r = Binop("^", r, r) in
+      let i2b r1 r2 suf = [zero r2; cmp r1 r2; Set ("ne", suf)] in
+      env, match op with
+      | "+" | "-" | "*" ->
+        [
+          Mov (x, eax);
+          Binop (op, y, eax);
+          Mov (eax, res)
+        ]
+      | "/" | "%" ->
+        [
+          Mov (x, eax);
+          Cltd;
+          Mov (y, edi);
+          IDiv edi;
+          Mov ((if op = "/" then eax else edx), res)
+        ]
+      | ">" | ">=" | "<" | "<=" | "==" | "!=" ->
+        [
+          Mov (x, eax);
+          zero edx;
+          cmp y eax;
+          Set (suffix_of_op op, "%dl");
+          Mov (edx, res)
+        ]
+      | "!!" | "&&" ->
+        i2b x eax "%al" @
+        i2b y edx "%dl" @
+        [Binop(op, edx, eax); Mov(eax, res)]
+      | _ -> failwith "unknown binary operator" in
+  List.fold_left (fun (e, o) i -> let (e', o') = compile e i in (e', o @ o')) (env, [])
+
+(* A set of strings *)
 module S = Set.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
-                     
+
+let make_assoc l =
+  let init =
+    let rec init' s x f =
+      if x == 0 then [] else
+        (f s)::(init' (s + 1) (x - 1) f) in
+    init' 0 in
+  List.combine l (init (List.length l) (fun x -> x))
+
+let rec take l = function
+  | 0 -> [], l
+  | n -> let a, b = take (List.tl l) (n - 1) in (List.hd l)::a, b
+
 class env =
   object (self)
     val globals     = S.empty (* a set of global variables         *)
@@ -106,24 +212,23 @@ class env =
     val args        = []      (* function arguments                *)
     val locals      = []      (* function local variables          *)
     val fname       = ""      (* function name                     *)
-                        
+
     (* gets a name for a global variable *)
     method loc x =
       try S (- (List.assoc x args)  -  1)
-      with Not_found ->  
+      with Not_found ->
         try S (List.assoc x locals) with Not_found -> M ("global_" ^ x)
-        
+
     (* allocates a fresh position on a symbolic stack *)
-    method allocate =    
+    method allocate =
       let x, n =
-	let rec allocate' = function
-	| []                            -> ebx     , 0
-	| (S n)::_                      -> S (n+1) , n+1
-	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
-        | (M _)::s                      -> allocate' s
-	| _                             -> S 0     , 1
-	in
-	allocate' stack
+	      let rec allocate' = function
+	        | []                                -> ebx     , 0
+	        | (S n)::_                          -> S (n+1) , n+2
+	        | (R n)::_ when n + 1 < num_of_regs -> R (n+1) , stack_slots
+	        | _                                 -> S 0     , 1
+	      in
+	      allocate' stack
       in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 
@@ -136,31 +241,34 @@ class env =
     (* pops two operands from the symbolic stack *)
     method pop2 = let x::y::stack' = stack in x, y, {< stack = stack' >}
 
+    (* pops n operands from the symbolic stack *)
+    method popn n = let res, stack' = take stack n in res, {< stack = stack' >}
+
     (* registers a global variable in the environment *)
     method global x  = {< globals = S.add ("global_" ^ x) globals >}
 
-    (* gets all global variables *)      
+    (* gets all global variables *)
     method globals = S.elements globals
 
     (* gets a number of stack positions allocated *)
-    method allocated = stack_slots                                
-                                
+    method allocated = stack_slots
+
     (* enters a function *)
     method enter f a l =
       {< stack_slots = List.length l; stack = []; locals = make_assoc l; args = make_assoc a; fname = f >}
 
     (* returns a label for the epilogue *)
     method epilogue = Printf.sprintf "L%s_epilogue" fname
-                                     
+
     (* returns a name for local size meta-symbol *)
     method lsize = Printf.sprintf "L%s_SIZE" fname
 
     (* returns a list of live registers *)
     method live_registers =
       List.filter (function R _ -> true | _ -> false) stack
-      
+
   end
-  
+
 (* Generates an assembler text for a program: first compiles the program into
    the stack code, then generates x86 assember code, then prints the assembler file
 *)
@@ -171,7 +279,7 @@ let genasm (ds, stmt) =
       (new env)
       ((LABEL "main") :: (BEGIN ("main", [], [])) :: SM.compile (ds, stmt))
   in
-  let data = Meta "\t.data" :: (List.map (fun s -> Meta (s ^ ":\t.int\t0")) env#globals) in 
+  let data = Meta "\t.data" :: (List.map (fun s -> Meta (s ^ ":\t.int\t0")) env#globals) in
   let asm = Buffer.create 1024 in
   List.iter
     (fun i -> Buffer.add_string asm (Printf.sprintf "%s\n" @@ show i))
@@ -185,4 +293,4 @@ let build prog name =
   close_out outf;
   let inc = try Sys.getenv "RC_RUNTIME" with _ -> "../runtime" in
   Sys.command (Printf.sprintf "gcc -m32 -o %s %s/runtime.o %s.s" name inc name)
- 
+
