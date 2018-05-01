@@ -3,8 +3,6 @@ open Ostap
 let parse infile =
   let s = Util.read infile in
   let keywords = [
-    "read";
-    "write";
     "skip";
     "if";
     "then";
@@ -19,12 +17,15 @@ let parse infile =
     "until";
     "fun";
     "local";
-    "return"
+    "return";
+    "length"
   ] in
   Util.parse
     (object
        inherit Matcher.t s
        inherit Util.Lexers.decimal s
+       inherit Util.Lexers.string s
+       inherit Util.Lexers.char s
        inherit Util.Lexers.ident keywords s
        inherit Util.Lexers.skip [
 	 Matcher.Skip.whitespaces " \t\n";
