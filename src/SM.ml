@@ -22,7 +22,7 @@ type prg = insn list
 (* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
 *)
-type config = (prg * State.t) list * int list * Expr.config
+type config = (prg * State.t) list * Value.t list * Expr.config
 
 (* Stack machine interpreter
 
@@ -53,8 +53,8 @@ let rec eval env ((cstack, stack, con) as conf) =
       | STRING s,    _,           _             -> (cstack, Value.of_string s::stack, con),        prog
       | LD v,        _,           (st, i, o)    -> (cstack, State.eval st v::stack, (st, i, o)),   prog
       | ST v,        n::stack,    (st, i, o)    -> (cstack, stack, (State.update v n st, i, o)),   prog
-      | STA (v, n),  _,           (st, i, o)    ->
-        let x::ids, stack = take (n + 1) stack in
+      | STA (v, n),  x::stack,           (st, i, o)    ->
+        let ids, stack = take n stack in
         (cstack, stack, (Language.Stmt.update st v x (List.rev ids), i, o)), prog
       | LABEL _,     _,           _             -> conf, prog
       | JMP l,       _,           _             -> conf, (env#labeled l)
@@ -81,7 +81,7 @@ let rec eval env ((cstack, stack, con) as conf) =
         (match cstack with
          | (p', st')::cstack' -> (cstack', stack, (State.leave st st', i, o)), p'
          | _ -> conf, [])
-      | _ -> failwith "Bad SM program" in
+      | _ -> failwith ("Bad SM program: " ^ ( GT.transform(insn) (new @insn[show]) () stmt)) in
     eval env con' prog'
 
 (* Top-level evaluation
@@ -108,7 +108,7 @@ let run p i =
            let f = match f.[0] with 'L' -> String.sub f 1 (String.length f - 1) | _ -> f in
            let args, stack' = take n stack in
            let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) (List.rev args) f in
-           let stack'' = if p then stack' else let Some r = r in r::stack' in
+           let stack'' = if (not p) then stack' else let Some r = r in r::stack' in
            Printf.printf "Builtin: %s\n";
            (cstack, stack'', (st, i, o))
        end
@@ -126,7 +126,7 @@ let run p i =
    stack machine
 *)
 
-let label_of_name = (^) "l_"
+let label_of_name = (^) "L"
 
 class lenv =
   let name num = label_of_name (string_of_int num) in

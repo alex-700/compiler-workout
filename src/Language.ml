@@ -30,7 +30,9 @@ struct
   let of_array  a = Array  a
 
   let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-  let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+  (*  let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)*)
+  (* O(length^2)? Seriously? *)
+  let update_array a i x = List.mapi (fun j y -> if j = i then x else y) a
 
 end
 
@@ -108,7 +110,7 @@ struct
   (* integer constant   *) | Const  of int
   (* array              *) | Array  of t list
   (* string             *) | String of string
-  (* S-expressions      *) | Sexp   of string * t list
+(*  (* S-expressions      *) | Sexp   of string * t list*)
   (* variable           *) | Var    of string
   (* binary operator    *) | Binop  of string * t * t
   (* element extraction *) | Elem   of t * t
@@ -170,6 +172,7 @@ struct
   let rec eval env ((st, i, o, r) as c) = function
     | Const x           -> (st, i, o, Some (Value.of_int x))
     | Array xs          -> eval' env c xs "$array"
+    | String s          -> (st, i, o, Some (Value.of_string s))
     | Var name          -> (st, i, o, Some (State.eval st name))
     | Binop (op, l, r)  ->
       let (st, i, o, Some l) as c = eval env c l in
@@ -216,10 +219,9 @@ struct
       | empty { Var v }
       ) {s}
     | -"(" parse -")";
-      primary : b: base s: (
-        is: (-"[" i: parse -"]")* { List.fold_left (fun x y -> Elem (x, y)) b is }
-      | "." %"length" { Length b }
-      ) { s };
+      primary : s: (
+        b: base is: (-"[" i: parse -"]")* { List.fold_left (fun x y -> Elem (x, y)) b is }
+      ) len:("." %"length")? { match len with None -> s | Some _ -> Length s };
     parse: !(Util.expr
                (fun x -> x)
                [|
@@ -376,6 +378,7 @@ type t = Definition.t list * Stmt.t
 
    Takes a program and its input stream, and returns the output stream
 *)
+
 
 let eval (defs, body) i =
   let module M = Map.Make (String) in
