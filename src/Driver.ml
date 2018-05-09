@@ -4,21 +4,13 @@ let parse infile =
   let s = Util.read infile in
   let keywords = [
     "skip";
-    "if";
-    "then";
-    "elif";
-    "else";
-    "fi";
-    "while";
-    "do";
-    "od";
+    "if"; "then"; "elif";  "else"; "fi";
+    "while"; "do"; "od";
     "for";
-    "repeat";
-    "until";
-    "fun";
-    "local";
-    "return";
-    "length"
+    "repeat"; "until";
+    "fun"; "local"; "return";
+    "length";
+    "case"; "of"; "esac"
   ] in
   Util.parse
     (object
@@ -60,11 +52,9 @@ let main =
 	    let output =
        if interpret
 	     then Language.eval prog input
-	    else
-       let stmt = SM.compile prog in
-       SM.run stmt input
-	in
-  List.iter (fun i -> Printf.printf "%d\n" i) output
+       else SM.run (SM.compile prog) input
+	    in
+     List.iter (fun i -> Printf.printf "%d\n" i) output
     | `Fail er -> Printf.eprintf "Syntax error: %s\n" er
   with Invalid_argument _ ->
     Printf.printf "Usage: rc [-i | -s] <input file.expr>\n"
