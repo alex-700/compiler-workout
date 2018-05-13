@@ -1,0 +1,69 @@
+fun test_inner(x) {
+    case x of
+      `a(`c) -> write(0)
+    | `a(`d) -> write(1)
+    | _      -> write(2)
+    esac
+}
+
+fun test_bindings(x) {
+    case x of
+      `a(x, y, z) ->
+      write(x); write(y); write(z)
+    | `b(x, y) ->
+      write(x); write(y)
+    | `c(`a(a, b, c), `b(d, e)) ->
+      write(a); write(b); write(c); write(d); write(e)
+    | x -> write(x)
+    esac
+}
+
+fun test_all(x) {
+    case x of
+      `a -> return 1
+    | `a(x) -> if x then return 2 else return 3 fi
+    | `a(_, _) -> return 4
+    | `a(`tak, `b(x, `a(y)), z) -> write(x); write(y); if z then return 5 else return 6 fi
+    | `a(`nie, `b(x, `a(y)), z) -> write(z); write(y); if x then return 7 else return 8 fi
+    | `b(x) -> case x of
+                 `b(x, y) -> case x of
+                               `c -> return 9
+                             | `d(y) -> return y
+                             | _ -> write(11)
+                             esac
+               | `c(x) -> return x
+               esac;
+               return 11
+    | `b(`tak, x) -> return x
+    | _ -> write(42)
+    esac;
+    return 0
+} 
+
+test_inner(`a(1));
+test_inner(`a(`c));
+test_inner(`a(`c()));
+test_inner(`a(`d));
+test_inner(`a(`c(1)));
+test_inner(`a(`b));
+
+test_bindings(`a(0, 1, 2));
+test_bindings(`b(3, 4));
+test_bindings(`c(`a(5, 6, 7), `b(8, 9)));
+test_bindings(10);
+
+write(test_all(`a));
+write(test_all(`a(1)));
+write(test_all(`a(0)));
+write(test_all(`a(`tak, `nie)));
+write(test_all(`a(`tak, `b(1, `a(2)), 1)));
+write(test_all(`a(`tak, `b(3, `a(4)), 0)));
+write(test_all(`a(`nie, `b(1, `a(5)), 6)));
+write(test_all(`a(`nie, `b(0, `a(7)), 8)));
+write(test_all(`b(`b(`c, 0))));
+write(test_all(`b(`b(`d(10), 0))));
+write(test_all(`b(`b(`e(10), 0))));
+write(test_all(`b(`c(12))));
+write(test_all(`b(`tak, 13)));
+write(test_all(`c))
+

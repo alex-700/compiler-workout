@@ -119,7 +119,12 @@ struct
                                      | Value.Sexp (_, a) -> List.nth a i
                                )
                     )
-    | ".length"  -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Array a -> List.length a | Value.String s -> String.length s)))
+    | ".length"  -> (st, i, o, Some (Value.of_int
+                                       (match List.hd args with
+                                        | Value.Array a     -> List.length a
+                                        | Value.String s    -> String.length s
+                                        | Value.Sexp (_, a) -> List.length a
+                                       )))
     | ".array"   -> (st, i, o, Some (Value.of_array args))
     | "isArray"  -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.Array  _ -> 1 | _ -> 0))
     | "isString" -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.String _ -> 1 | _ -> 0))
@@ -401,7 +406,7 @@ struct
           | Some ms ->
             let ns = List.map fst ms in (* optimize here *)
             let nst = List.fold_left (fun x (y, z) -> State.bind y z x) State.undefined ms in
-            eval' (State.push st nst ns, i, o, None) k next)
+            eval' (State.push st nst ns, i, o, None) k (Seq(next, Leave)))
         | [] -> eval' (st, i, o, None) Skip k in
       match_patterns ps
     | Call (n, args) -> eval' (evalec (Expr.Call (n, args))) k Skip
