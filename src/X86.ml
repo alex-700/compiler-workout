@@ -93,18 +93,46 @@ let compile env =
   let mov r1 r2 = match r1, r2 with
     | R _, _ | _, R _ -> [Mov(r1, r2)]
     | _, _ -> [Mov (r1, eax); Mov (eax, r2)] in
-  let compile env = function
+  let compile env =
+    let call env name n r =
+      let name = match name.[0] with '.' -> "B" ^ (String.sub name 1 (String.length name - 1)) | _ -> name in
+      let save_regs = List.map (fun x -> Push x) (env#live_registers n) in
+      let load_regs = List.rev_map (fun x -> Pop x) (env#live_registers n) in
+      let rev_args, env = env#popn n in
+      let push_args = List.map (fun x -> Push x) rev_args in
+      let push_args = match name with
+        | "Barray" -> push_args @ [Push (L n)]
+        | "Bsta" -> let x::v::is = push_args in is @ [x; v; Push (L (n - 2))]
+        | _ -> push_args in
+      let result, env =
+        (if r then let reg, env = env#allocate in [Mov(eax, reg)], env else [], env) in
+      env,
+      save_regs @
+      push_args @
+      [Call name; Binop ("+", L (n * word_size), esp)] @
+      load_regs @
+      result
+    in
+    function
     | CONST n ->
       let s, env = env#allocate in
       env, [Mov (L n, s)]
-    | STRING s -> failwith "STRING"
+    | STRING s ->
+      let s, env = env#string s in
+      let l, env = env#allocate in
+      let env, call = call env ".string" 1 true in
+      env, Mov (M ("$" ^ s), l) :: call
     | LD x ->
       let s, env = (env#global x)#allocate in
       env, mov (env#loc x) s
     | ST x ->
       let s, env = (env#global x)#pop in
       env, mov s (env#loc x)
-    | STA (_, _) -> failwith "STA"
+    | STA (x, n) ->
+      let s, env = (env#global x)#allocate in
+      let push = mov (env#loc x) s in
+      let env, code = call env ".sta" (n + 2) false in
+      env, push @ code
     | LABEL l -> env, [Label l]
     | JMP l -> env, [Jmp l]
     | CJMP (s, l) ->
@@ -126,19 +154,7 @@ let compile env =
         env, [Mov(r, eax); Jmp env#epilogue]
       else
         env, [Jmp env#epilogue])
-    | CALL (name, n, r) ->
-      let save_regs = List.map (fun x -> Push x) env#live_registers in
-      let load_regs = List.rev_map (fun x -> Pop x) env#live_registers in
-      let rev_args, env = env#popn n in
-      let push_args = List.map (fun x -> Push x) rev_args in
-      let result, env =
-        (if r then let reg, env = env#allocate in [Mov(eax, reg)], env else [], env) in
-      env,
-      save_regs @
-      push_args @
-      [Call name; Binop ("+", L (n * word_size), esp)] @
-      load_regs @
-      result
+    | CALL (name, n, r) -> call env name n r
     | BINOP op ->
       let y, x, env = env#pop2 in
       let res, env = env#allocate in
@@ -186,8 +202,10 @@ let compile env =
 (* A set of strings *)
 module S = Set.Make (String)
 
-(* Environment implementation *)
+(* A map indexed by strings *)
+module M = Map.Make (String)
 
+(* Environment implementation *)
 let make_assoc l =
   let init =
     let rec init' s x f =
@@ -203,6 +221,8 @@ let rec take l = function
 class env =
   object (self)
     val globals     = S.empty (* a set of global variables         *)
+    val stringm     = M.empty (* a string map                      *)
+    val scount      = 0       (* string count                      *)
     val stack_slots = 0       (* maximal number of stack positions *)
     val stack       = []      (* symbolic stack                    *)
     val args        = []      (* function arguments                *)
@@ -214,17 +234,17 @@ class env =
       try S (- (List.assoc x args)  -  1)
       with Not_found ->
         try S (List.assoc x locals) with Not_found -> M ("global_" ^ x)
-
     (* allocates a fresh position on a symbolic stack *)
     method allocate =
       let x, n =
 	      let rec allocate' = function
-	        | []                                -> ebx     , 0
-	        | (S n)::_                          -> S (n+1) , n+2
-	        | (R n)::_ when n + 1 < num_of_regs -> R (n+1) , stack_slots
-	        | _                                 -> S 0     , 1
+	       | []                            -> ebx     , 0
+	       | (S n)::_                      -> S (n+1) , n+2
+	       | (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
+         | (M _)::s                      -> allocate' s
+	       | _                             -> S 0     , 1
 	      in
-	      allocate' stack
+	     allocate' stack
       in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 
@@ -243,8 +263,19 @@ class env =
     (* registers a global variable in the environment *)
     method global x  = {< globals = S.add ("global_" ^ x) globals >}
 
+    (* registers a string constant *)
+    method string x =
+      try M.find x stringm, self
+      with Not_found ->
+        let y = Printf.sprintf "string_%d" scount in
+        let m = M.add x y stringm in
+        y, {< scount = scount + 1; stringm = m>}
+
     (* gets all global variables *)
     method globals = S.elements globals
+
+    (* gets all string definitions *)
+    method strings = M.bindings stringm
 
     (* gets a number of stack positions allocated *)
     method allocated = stack_slots
@@ -260,9 +291,13 @@ class env =
     method lsize = Printf.sprintf "L%s_SIZE" fname
 
     (* returns a list of live registers *)
-    method live_registers =
-      List.filter (function R _ -> true | _ -> false) stack
-
+    method live_registers depth =
+      let rec inner d acc = function
+      | []             -> acc
+      | (R _ as r)::tl -> inner (d+1) (if d >= depth then (r::acc) else acc) tl
+      | _::tl          -> inner (d+1) acc tl
+      in
+      inner 0 [] stack
   end
 
 (* Generates an assembler text for a program: first compiles the program into
@@ -275,7 +310,8 @@ let genasm (ds, stmt) =
       (new env)
       ((LABEL "main") :: (BEGIN ("main", [], [])) :: SM.compile (ds, stmt))
   in
-  let data = Meta "\t.data" :: (List.map (fun s -> Meta (s ^ ":\t.int\t0")) env#globals) in
+  let data = Meta "\t.data" :: (List.map (fun s      -> Meta (Printf.sprintf "%s:\t.int\t0"         s  )) env#globals) @
+                               (List.map (fun (s, v) -> Meta (Printf.sprintf "%s:\t.string\t\"%s\"" v s)) env#strings) in
   let asm = Buffer.create 1024 in
   List.iter
     (fun i -> Buffer.add_string asm (Printf.sprintf "%s\n" @@ show i))
@@ -290,3 +326,15 @@ let build prog name =
   let inc = try Sys.getenv "RC_RUNTIME" with _ -> "../runtime" in
   Sys.command (Printf.sprintf "gcc -m32 -o %s %s/runtime.o %s.s" name inc name)
 
+(*  CONST 1 [1]
+    JMP L1  [1]
+    CONST 2 [1, 2]
+    JMP L3  [1, 2]
+    LABEL L1 [1, 2]
+    CALL print [1]
+    JMP L [1]
+    LABEL L3 [1]
+    CALL print []
+    CALL print :(
+    LABEL L4
+*)
