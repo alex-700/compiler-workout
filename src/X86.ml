@@ -16,6 +16,14 @@ type opnd =
   | M of string  (* a named memory location          *)
   | L of int     (* an immediate operand             *)
 
+let string_of_opnd = function
+  | R x -> regs.(x)
+  | S x -> "S " ^ (string_of_int x)
+  | M x -> "M " ^ x
+  | L x -> string_of_int x
+
+let string_of_stack l = "[" ^ (String.concat "|" (List.map string_of_opnd l)) ^ "]"
+
 (* For convenience we define the following synonyms for the registers: *)
 let ebx = R 0
 let ecx = R 1
@@ -86,7 +94,7 @@ open SM
 
      compile : env -> prg -> env * instr list
 
-   Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
+  Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
 let compile env =
@@ -102,6 +110,7 @@ let compile env =
       let push_args = List.map (fun x -> Push x) rev_args in
       let push_args = match name with
         | "Barray" -> push_args @ [Push (L n)]
+        | "Bsexp" -> push_args @ [Push (L n)]
         | "Bsta" -> let x::v::is = push_args in is @ [x; v; Push (L (n - 2))]
         | _ -> push_args in
       let result, env =
@@ -109,11 +118,10 @@ let compile env =
       env,
       save_regs @
       push_args @
-      [Call name; Binop ("+", L (n * word_size), esp)] @
+      [Call name; Binop ("+", L ((List.length push_args) * word_size), esp)] @
       load_regs @
       result
-    in
-    function
+    in function
     | CONST n ->
       let s, env = env#allocate in
       env, [Mov (L n, s)]
@@ -122,6 +130,10 @@ let compile env =
       let l, env = env#allocate in
       let env, call = call env ".string" 1 true in
       env, Mov (M ("$" ^ s), l) :: call
+    | SEXP (t, n) ->
+      let s, env = env#allocate in
+      let env, code = call env ".sexp" (n + 1) true in
+      env, [Mov (L env#hash t, s)] @ code
     | LD x ->
       let s, env = (env#global x)#allocate in
       env, mov (env#loc x) s
@@ -133,11 +145,11 @@ let compile env =
       let push = mov (env#loc x) s in
       let env, code = call env ".sta" (n + 2) false in
       env, push @ code
-    | LABEL l -> env, [Label l]
-    | JMP l -> env, [Jmp l]
+    | LABEL l -> (if env#is_barrier then (env#drop_barrier)#retrieve_stack l else env), [Label l]
+    | JMP l -> (env#set_stack l)#set_barrier, [Jmp l]
     | CJMP (s, l) ->
       let r, env = env#pop in
-      env, [Mov (r, eax); Binop ("&&", eax, eax); CJmp (s, l)] (* optimize it *)
+      env#set_stack l, [Mov (r, eax); Binop ("&&", eax, eax); CJmp (s, l)] (* optimize it *)
     | BEGIN (name, args, locs) ->
       let env = env#enter name args locs in
       env, [Push ebp; Mov(esp, ebp); Binop("-", M ("$" ^ env#lsize), esp)]
@@ -148,13 +160,37 @@ let compile env =
         Ret;
         Meta (Printf.sprintf "\t.set\t%s,\t%d" env#lsize (env#allocated * word_size))
       ]
+    | CALL (name, n, r) -> call env name n r
     | RET r ->
       (if r then
         let r, env = env#pop in
         env, [Mov(r, eax); Jmp env#epilogue]
       else
         env, [Jmp env#epilogue])
-    | CALL (name, n, r) -> call env name n r
+    | DROP -> snd env#pop, []
+    | DUP ->
+      let x = env#peek in
+      let s, env = env#allocate in
+      env, mov x s
+    | SWAP ->
+      let x, y = env#peek2 in
+      env, [Push x; Push y; Pop x; Pop y]
+    | TAG t ->
+      let s, env = env#allocate in
+      let env, code = call env ".tag" 2 true in
+      env, [Mov (L env#hash t, s)] @ code
+    | ENTER vs ->
+      let env, code =
+        List.fold_left
+          (fun (env, code) v ->
+             let s, env = env#pop in
+             env, (mov s @@ env#loc v)::code
+          )
+          (env#scope @@ List.rev vs, [])
+          (List.rev vs)
+      in
+      env, List.concat @@ List.rev code
+    | LEAVE -> env#unscope, []
     | BINOP op ->
       let y, x, env = env#pop2 in
       let res, env = env#allocate in
@@ -197,7 +233,13 @@ let compile env =
         i2b y edx "%dl" @
         [Binop(op, edx, eax); Mov(eax, res)]
       | _ -> failwith "unknown binary operator" in
-  List.fold_left (fun (e, o) i -> let (e', o') = compile e i in (e', o @ o')) (env, [])
+  List.fold_left
+    (fun (e, o) i ->
+       let (e', o') = compile e i in
+       (e', o @
+            (*[Meta (Printf.sprintf "# %s / stack = %s / locals = %s" (GT.show(SM.insn) i) e#show_stack e#show_locals)] @*)
+            o')
+    ) (env, [])
 
 (* A set of strings *)
 module S = Set.Make (String)
@@ -206,46 +248,97 @@ module S = Set.Make (String)
 module M = Map.Make (String)
 
 (* Environment implementation *)
+
+let list_init =
+  let rec init' s x f =
+    if x == 0 then [] else
+      (f s)::(init' (s + 1) (x - 1) f) in
+  init' 0
+
 let make_assoc l =
-  let init =
-    let rec init' s x f =
-      if x == 0 then [] else
-        (f s)::(init' (s + 1) (x - 1) f) in
-    init' 0 in
-  List.combine l (init (List.length l) (fun x -> x))
+  List.combine l (list_init (List.length l) (fun x -> x))
 
 let rec take l = function
   | 0 -> [], l
   | n -> let a, b = take (List.tl l) (n - 1) in (List.hd l)::a, b
 
+(* Environment implementation *)
 class env =
+  let chars          = "_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNJPQRSTUVWXYZ" in
+  let make_assoc l i = List.combine l (list_init (List.length l) (fun x -> x + i)) in
+  let rec assoc  x   = function [] -> raise Not_found | l :: ls -> try List.assoc x l with Not_found -> assoc x ls in
   object (self)
     val globals     = S.empty (* a set of global variables         *)
     val stringm     = M.empty (* a string map                      *)
     val scount      = 0       (* string count                      *)
     val stack_slots = 0       (* maximal number of stack positions *)
+    val static_size = 0       (* static data size                  *)
     val stack       = []      (* symbolic stack                    *)
     val args        = []      (* function arguments                *)
     val locals      = []      (* function local variables          *)
     val fname       = ""      (* function name                     *)
+    val stackmap    = M.empty (* labels to stack map               *)
+    val barrier     = false   (* barrier condition                 *)
+
+(*    method show_stack =
+      GT.show(GT.list) (GT.show(opnd)) stack
+*)
+
+    method show_stack = string_of_stack stack
+
+    method show_locals = String.concat "; " @@ List.map
+        (fun x ->
+           "(" ^
+           (String.concat " | " @@ List.map
+             ( fun (x, y) ->
+                 x ^ " -> " ^ (string_of_int y)
+             )
+             x
+           ) ^ ")"
+        )
+        locals
+
+    method print_locals =
+      Printf.printf "LOCALS: size = %d\n" static_size;
+      List.iter
+        (fun l ->
+          Printf.printf "(";
+          List.iter (fun (a, i) -> Printf.printf "%s=%d " a i) l;
+          Printf.printf ")\n"
+        ) locals;
+      Printf.printf "END LOCALS\n"
+
+    (* check barrier condition *)
+    method is_barrier = barrier
+
+    (* set barrier *)
+    method set_barrier = {< barrier = true >}
+
+    (* drop barrier *)
+    method drop_barrier = {< barrier = false >}
+
+    (* associates a stack to a label *)
+    method set_stack l = {< stackmap = M.add l stack stackmap >}
+
+    (* retrieves a stack for a label *)
+    method retrieve_stack l =
+      try {< stack = M.find l stackmap >} with Not_found -> self
 
     (* gets a name for a global variable *)
     method loc x =
-      try S (- (List.assoc x args)  -  1)
+      try S (assoc x locals)
       with Not_found ->
-        try S (List.assoc x locals) with Not_found -> M ("global_" ^ x)
+        try S (- (List.assoc x args)  -  1) with Not_found -> M ("global_" ^ x)
+
     (* allocates a fresh position on a symbolic stack *)
     method allocate =
       let x, n =
 	      let rec allocate' = function
-	       | []                            -> ebx     , 0
-	       | (S n)::_                      -> S (n+1) , n+2
-	       | (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
-         | (M _)::s                      -> allocate' s
-	       | _                             -> S 0     , 1
-	      in
-	     allocate' stack
-      in
+	       | []                            -> ebx          , 0
+	       | (S n)::_                      -> S (n+1)      , n+2
+	       | (R n)::_ when n < num_of_regs -> R (n+1)      , stack_slots
+	       | _                             -> S static_size, static_size + 1 in
+	    allocate' stack in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 
     (* pushes an operand to the symbolic stack *)
@@ -259,6 +352,20 @@ class env =
 
     (* pops n operands from the symbolic stack *)
     method popn n = let res, stack' = take stack n in res, {< stack = stack' >}
+
+    (* peeks the top of the stack (the stack does not change) *)
+    method peek = List.hd stack
+
+    (* peeks two topmost values from the stack (the stack itself does not change) *)
+    method peek2 = let x::y::_ = stack in x, y
+
+    (* tag hash: gets a hash for a string tag *)
+    method hash tag =
+      let h = ref 0 in
+      for i = 0 to min (String.length tag - 1) 4 do
+        h := (!h lsl 6) lor (String.index chars tag.[i])
+      done;
+      !h
 
     (* registers a global variable in the environment *)
     method global x  = {< globals = S.add ("global_" ^ x) globals >}
@@ -282,7 +389,19 @@ class env =
 
     (* enters a function *)
     method enter f a l =
-      {< stack_slots = List.length l; stack = []; locals = make_assoc l; args = make_assoc a; fname = f >}
+      let n = List.length l in
+      {< static_size = n; stack_slots = n; stack = []; locals = [make_assoc l 0]; args = make_assoc a 0; fname = f >}
+
+    (* enters a scope *)
+    method scope vars =
+      let n = List.length vars in
+      let static_size' = n + static_size in
+      {< stack_slots = max stack_slots static_size'; static_size = static_size'; locals = (make_assoc vars static_size) :: locals >}
+
+    (* leaves a scope *)
+    method unscope =
+      let n = List.length (List.hd locals) in
+      {< static_size = static_size - n; locals = List.tl locals >}
 
     (* returns a label for the epilogue *)
     method epilogue = Printf.sprintf "L%s_epilogue" fname
@@ -326,15 +445,3 @@ let build prog name =
   let inc = try Sys.getenv "RC_RUNTIME" with _ -> "../runtime" in
   Sys.command (Printf.sprintf "gcc -m32 -o %s %s/runtime.o %s.s" name inc name)
 
-(*  CONST 1 [1]
-    JMP L1  [1]
-    CONST 2 [1, 2]
-    JMP L3  [1, 2]
-    LABEL L1 [1, 2]
-    CALL print [1]
-    JMP L [1]
-    LABEL L3 [1]
-    CALL print []
-    CALL print :(
-    LABEL L4
-*)

@@ -19,15 +19,15 @@
 
 /* A structure to represent a tagged array/string */
 typedef struct {
-  int tag;          
+  int tag;
   char contents[0];
-} data; 
+} data;
 
 /* A structure to represent S-expression */
 typedef struct {
-  int tag; 
-  data contents; 
-} sexp; 
+  int tag;
+  data contents;
+} sexp;
 
 /* Length builtin */
 extern int Blength (void *p) {
@@ -40,7 +40,7 @@ extern void* Belem (void *p, int i) {
   data *a = TO_DATA(p);
 
   if (TAG(a->tag) == STRING_TAG) return (void*)(int)(a->contents[i]);
-  
+
   return (void*) ((int*) a->contents)[i];
 }
 
@@ -51,7 +51,7 @@ extern void* Bstring (void *p) {
 
   r->tag = n;
   strncpy (r->contents, p, n + 1);
-  
+
   return r->contents;
 }
 
@@ -62,14 +62,14 @@ extern void* Barray (int n, ...) {
   data *r = (data*) malloc (sizeof(int) * (n+1));
 
   r->tag = ARRAY_TAG | n;
-  
+
   va_start(args, n);
-  
+
   for (i=0; i<n; i++) {
     int ai = va_arg(args, int);
-    ((int*)r->contents)[i] = ai; 
+    ((int*)r->contents)[i] = ai;
   }
-  
+
   va_end(args);
 
   return r->contents;
@@ -83,23 +83,25 @@ extern void* Bsexp (int n, ...) {
   data *d = &(r->contents);
 
   d->tag = SEXP_TAG | (n-1);
-  
+
   va_start(args, n);
-  
+
   for (i=0; i<n-1; i++) {
     int ai = va_arg(args, int);
-    ((int*)d->contents)[i] = ai; 
+    ((int*)d->contents)[i] = ai;
   }
 
   r->tag = va_arg(args, int);
   va_end(args);
-  
+
   return d->contents;
 }
 
 /* Tag checking */
 extern int Btag (void *d, int t) {
+//  printf("addr: %d\n", d);
   data *r = TO_DATA(d);
+//  printf("t: %d, tag: %d, sexp_tag: %d\n", t, TAG(r->tag), TO_SEXP(d)->tag);
   return TAG(r->tag) == SEXP_TAG && TO_SEXP(d)->tag == t;
 }
 
@@ -108,7 +110,7 @@ extern void Bsta (int n, int v, void *s, ...) {
   va_list args;
   int i, k;
   data *a;
-  
+
   va_start(args, s);
 
   for (i=0; i<n-1; i++) {
@@ -118,16 +120,16 @@ extern void Bsta (int n, int v, void *s, ...) {
 
   k = va_arg(args, int);
   a = TO_DATA(s);
-  
+
   if (TAG(a->tag) == STRING_TAG)((char*) s)[k] = (char) v;
   else ((int*) s)[k] = v;
 }
-   
+
 /* Read builtin */
 extern int Lread () {
   int result;
 
-  printf ("> "); 
+  printf ("> ");
   fflush (stdout);
   scanf  ("%d", &result);
 
